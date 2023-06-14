@@ -931,6 +931,7 @@ class ShowL2vpnBridgeDomainDetailSchema(MetaParser):
                         Optional('mld_snooping_profile'): str,
                         Optional('mac_limit_threshold'): str,
                         Optional('mid_cvpls_config_index'): str,
+                        Optional('load_balance_hashing'): str,
                         Optional('p2mp_pw'): str,
                         Optional('mtu'): int,
                         Optional('bridge_mtu'): str,
@@ -947,11 +948,11 @@ class ShowL2vpnBridgeDomainDetailSchema(MetaParser):
                             Optional('interfaces'): {
                                 Any(): {
                                     'state': str,
-                                    'type': str,
+                                    Optional('type'): str,
                                     Optional('vlan_num_ranges'): str,
                                     Optional('mac_aging_type'): str,
                                     Optional('mtu'): int,
-                                    'xc_id': str,
+                                    Optional('xc_id'): str,
                                     Optional('interworking'): str,
                                     Optional('mst_i'): int,
                                     Optional('mst_i_state'): str,
@@ -1034,6 +1035,11 @@ class ShowL2vpnBridgeDomainDetailSchema(MetaParser):
                                                 'interworking': str,
                                                 Optional('pw_backup_disable_delay'): int,
                                                 'sequencing': str,
+                                                Optional('load_balance_hashing'): str,
+                                                Optional('flow_label_flags'): {
+                                                    'configured': str,
+                                                    'negotiated': str
+                                                },
                                                 Optional('mpls'): {
                                                     Any(): {
                                                         'local': str,
@@ -1049,7 +1055,8 @@ class ShowL2vpnBridgeDomainDetailSchema(MetaParser):
                                                             'local': str,
                                                             'remote': str
                                                         },
-                                                        'pw_status_tlv': {
+                                                        # Optional('pw_status_tlv'): { # related to my vpls output, but also should really be moved outside of this
+                                                        Optional('pw_status_tlv'): {
                                                             'local': str,
                                                             'remote': str
                                                         }
@@ -1136,17 +1143,27 @@ class ShowL2vpnBridgeDomainDetailSchema(MetaParser):
                                     Any(): {
                                         'pw_id': {
                                             Any(): {
-                                                'ac_id': str,
+                                                Optional('ac_id'): str,
                                                 'state': str,
                                                 'xc_id': str,
+                                                Optional('pw_class'): str,
                                                 'encapsulation': str,
+                                                Optional('protocol'): str,
+                                                Optional('pw_type'): str,
                                                 'source_address': str,
-                                                'encap_type': str,
+                                                Optional('encap_type'): str,
                                                 'control_word': str,
+                                                Optional('interworking'): str,
+                                                Optional('pw_backup_disable_delay'): int,
                                                 'sequencing': str,
+                                                Optional('load_balance_hashing'): str,
+                                                Optional('flow_label_flags'): {
+                                                    'configured': str,
+                                                    'negotiated': str
+                                                },
                                                 Optional('lsp'): {
                                                     'state': str,
-                                                    'evpn': {
+                                                    Optional('evpn'): {
                                                         Any(): {
                                                             'local': str,
                                                             'remote': str,
@@ -1161,7 +1178,15 @@ class ShowL2vpnBridgeDomainDetailSchema(MetaParser):
                                                             Optional('remote_type'): list,
                                                             Optional('local_type'): list
                                                         }
-                                                    }
+                                                    },
+                                                    Optional('pw'): {
+                                                        Any(): {
+                                                            'local': str,
+                                                            'remote': str,
+                                                            Optional('remote_type'): list,
+                                                            Optional('local_type'): list
+                                                        }
+                                                    },
                                                 },
                                                 Optional('status_code'): str,
                                                 'create_time': str,
@@ -1270,6 +1295,7 @@ class ShowL2vpnBridgeDomainDetail(ShowL2vpnBridgeDomainDetailSchema):
         vfi_obj_dict = {}
         interface_found = False
         label_found = False
+        table_found = False
         
         # Bridge group: g1, bridge-domain: bd1, id: 0, state: up, ShgId: 0, MSTi: 0
         # Bridge group: EVPN-Multicast, bridge-domain: EVPN-Multicast-BTV, id: 0, state: up, ShgId: 0, MSTi: 0
@@ -1394,13 +1420,14 @@ class ShowL2vpnBridgeDomainDetail(ShowL2vpnBridgeDomainDetailSchema):
                         r'is +(?P<state>[\S ]+)$')
 
         # PW class mpls, XC ID 0xff000001
-        p27 = re.compile(r'^PW +class +(?P<pw_class>\w+), +XC +ID +(?P<xc_id>\S+)$')
-
+        # PW class not set, XC ID 0xa0000005
+        p27 = re.compile(r'^PW +class +(?P<pw_class>(\w+)|(not set)), +XC +ID +(?P<xc_id>\S+)$')
         # PW class not set
         p27_1 = re.compile(r'^PW +class +(?P<pw_class>[\S ]+)$')
 
         # Encapsulation MPLS, protocol LDP
-        p28 = re.compile(r'^Encapsulation +(?P<encapsulation>\S+)(, +protocol +(?P<protocol>\S+))?$')
+        # Encapsulation MPLS, Auto-discovered (BGP), protocol BGP
+        p28 = re.compile(r'^Encapsulation +(?P<encapsulation>\S+)(, Auto-discovered \([\S]+\))?(, +protocol +(?P<protocol>\S+))?$') # later
 
         # PW type Ethernet, control word disabled, interworking none
         p29 = re.compile(r'^(?P<type>PW|Encap) +type +(?P<pw_type>\S+), +control +word +(?P<control_word>\S+)(, +interworking +(?P<interworking>\S+))?$')
@@ -1410,6 +1437,12 @@ class ShowL2vpnBridgeDomainDetail(ShowL2vpnBridgeDomainDetailSchema):
 
         # Sequencing not set
         p31 = re.compile(r'Sequencing +(?P<sequencing>[\S ]+)$')
+
+        # Load Balance Hashing: src-dst-ip
+        p31_1 = re.compile(r'Load Balance Hashing: (?P<load_balance_hashing>\S+)$')
+
+        # Flow Label flags configured (Tx=1,Rx=1), negotiated (Tx=0,Rx=0)
+        p32_0 = re.compile(r'Flow Label flags configured \((?P<configured>[\S ]+)\), negotiated \((?P<negotiated>[\S ]+)\)$')
 
         # MPLS         Local                          Remote
         # EVPN         Local                          Remote
@@ -2004,18 +2037,34 @@ class ShowL2vpnBridgeDomainDetail(ShowL2vpnBridgeDomainDetailSchema):
             # PW: neighbor 10.4.1.1, PW ID 1, state is up ( established )
             m = p26.match(line)
             if m:
-                dict_type = 'pw'
                 group = m.groupdict()
-                neighbor = group['neighbor']
-                pw_id = group['pw_id']
-                state = group['state']
-                pw_id_dict = vfi_obj_dict.setdefault('neighbor', {}). \
-                    setdefault(neighbor, {}). \
-                    setdefault('pw_id', {}). \
-                    setdefault(pw_id, {})
-                pw_id_dict.update({'state': state})
-                label_dict = pw_id_dict
-                continue
+                outer_dict = {}
+                if dict_type == 'access_pw':
+                    neighbor = group['neighbor']
+                    pw_id = group['pw_id']
+                    state = group['state']
+                    pw_id_dict = bridge_domain_dict.setdefault('access_pw', {}). \
+                        setdefault('PW_' + neighbor, {}). \
+                        setdefault('neighbor', {}). \
+                        setdefault(neighbor, {}). \
+                        setdefault('pw_id', {}). \
+                        setdefault(pw_id, {})
+                    pw_id_dict.update({'state': state})
+                    label_dict = pw_id_dict
+                    continue
+                else:
+                    dict_type = 'pw'
+                    group = m.groupdict()
+                    neighbor = group['neighbor']
+                    pw_id = group['pw_id']
+                    state = group['state']
+                    pw_id_dict = vfi_obj_dict.setdefault('neighbor', {}). \
+                        setdefault(neighbor, {}). \
+                        setdefault('pw_id', {}). \
+                        setdefault(pw_id, {})
+                    pw_id_dict.update({'state': state})
+                    label_dict = pw_id_dict
+                    continue
 
             # PW class mpls, XC ID 0xff000001
             m = p27.match(line)
@@ -2075,6 +2124,26 @@ class ShowL2vpnBridgeDomainDetail(ShowL2vpnBridgeDomainDetailSchema):
                 pw_id_dict.update({'sequencing': sequencing})
                 continue
 
+            # Load Balance Hashing: src-dst-ip
+            m = p31_1.match(line)
+            if m:
+                group = m.groupdict()
+                if dict_type == 'bridge_domain':
+                    bridge_domain_dict['load_balance_hashing'] = group['load_balance_hashing']
+                elif dict_type == 'pw' or dict_type == 'access_pw':
+                    pw_id_dict['load_balance_hashing'] = group['load_balance_hashing']
+                continue
+
+            # Flow Label flags configured (Tx=1,Rx=1), negotiated (Tx=0,Rx=0)
+            m = p32_0.match(line)
+            if m:
+                group = m.groupdict()
+                pw_id_dict['flow_label_flags'] = {
+                    'configured': group['configured'],
+                    'negotiated': group['negotiated']
+                }
+                continue
+
             # MPLS         Local                          Remote
             m = p32.match(line)
             if m:
@@ -2086,10 +2155,15 @@ class ShowL2vpnBridgeDomainDetail(ShowL2vpnBridgeDomainDetailSchema):
             # ------------ ------------------------------ -----------------------------
             m = p34.match(line)
             if m:
-                mpls_pairs = {}
-                for m in re.finditer(r'-+', original_line):
-                    mpls_pairs.update({m.start(): m.end()})
-                continue
+                if not table_found:
+                    table_found = True
+                    mpls_pairs = {}
+                    for m in re.finditer(r'-+', original_line):
+                        mpls_pairs.update({m.start(): m.end()})
+                    continue
+                if table_found:
+                    label_found = False
+                    table_found = False
 
             # Create time: 12/03/2008 14:03:00 (17:17:30 ago)
             m = p36.match(line)
